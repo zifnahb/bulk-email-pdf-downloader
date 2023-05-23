@@ -8,6 +8,9 @@ import imapclient
 import datetime
 import tkinter as tk
 from tkinter import filedialog, ttk, messagebox
+from tkinter import ttk, messagebox
+from tkinter.tix import Balloon
+import openpyxl
 from tkcalendar import DateEntry
 import tkinter.messagebox
 import ssl
@@ -17,7 +20,11 @@ from pdf2image import convert_from_path
 from PIL import Image, ImageTk
 import PyPDF2
 import docx
-
+import re
+import pandas as pd
+from PyPDF2 import PdfReader
+from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 
 frame_index = 0
 global results_listbox
@@ -228,6 +235,89 @@ def clear_downloaded_files_list():
     downloaded_files_list.clear()
     files_listbox.delete(0, tk.END)
 
+
+def parse_pdf_to_excel():
+    file_path = filedialog.askopenfilename(filetypes=[("PDF files", "*.pdf")])
+    if not file_path:  # Check if the user selected a file
+        print("No file selected.")
+        return
+
+    reader = PdfReader(file_path)
+    content = next(iter(reader.pages)).extract_text()
+
+    # Split the content by line breaks and iterate over the lines
+    lines = content.split("\n")
+    data = []
+    for line in lines:
+        # Use regular expressions to extract the fields
+        match = re.match(r"(\d+)\s+([a-zA-Z0-9\s,.]*)\s(\d+)\s+([\d,]+)\s+([\d,.%]+)\s+([\d,]+)", line)
+        if match:  # Check if the line matches the expected format
+            # Map the matched groups to their respective column names
+            data.append({
+                "Artikelnr": match.group(1),
+                "Omschrijving": match.group(2),
+                "Aantal": match.group(3),
+                "Prijs per stuk": match.group(4).replace(" ", ""),  # remove any spaces
+                "Korting": match.group(5),
+                "Netto": match.group(6).replace(" ", "")  # remove any spaces
+            })
+        else:
+            print(f"Line didn't match the pattern: {line}")
+
+    print(f"Extracted data: {data}")
+
+    # Create a DataFrame from the data
+    df = pd.DataFrame(data)
+
+    # Load the existing Excel file or create a new one if it doesn't exist
+    try:
+        df_existing = pd.read_excel("output.xlsx")
+        df = pd.concat([df_existing, df])
+    except FileNotFoundError:
+        pass
+
+    # Writing DataFrame to Excel
+    df.to_excel('output.xlsx', index=False)
+
+    # Load the workbook
+    wb = load_workbook(filename="output.xlsx")
+    sheet = wb.active
+
+    # Set the width of the columns
+    for column in sheet.columns:
+        max_length = 0
+        column = [cell for cell in column]
+        column_name = column[0].value
+        if column_name is not None:
+            max_length = len(column_name)
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(cell.value)
+                except:
+                    pass
+            adjusted_width = (max_length + 2)
+        else:
+            adjusted_width = 11
+
+        # Make "Omschrijving" column 2 times wider
+        if column_name == "Omschrijving":
+            adjusted_width *= 1.5
+
+        sheet.column_dimensions[get_column_letter(column[0].column)].width = adjusted_width
+
+    # Save the workbook
+    wb.save("output.xlsx")
+
+def clear_output_file():
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for row in ws.iter_rows():
+        for cell in row:
+            cell.value = None
+    wb.save('output.xlsx')
+    print("Output file has been cleared.")
+
 def generate_summary():
     file_counter = collections.Counter()
     total_size = 0
@@ -271,7 +361,14 @@ def download_attachments_all_keywords_gui():
 
     tk.messagebox.showinfo("Download Complete", "Alle bijlagen zijn gedownload.")
 
+pdf_window = None
+
 def open_pdf_file():
+    global pdf_window
+    if pdf_window is not None:
+        messagebox.showwarning("Warning", "Please close the currently open PDF window before opening another.")
+        return
+
     file_path = filedialog.askopenfilename(filetypes=[("PDF files", "*.pdf")])
     if file_path:
         images = convert_from_path(file_path, dpi=300)
@@ -279,19 +376,25 @@ def open_pdf_file():
             image = images[0]
             image.thumbnail((500, 500))
             photo = ImageTk.PhotoImage(image)
-            pdf_preview_label.config(image=photo)
-            pdf_preview_label.image = photo
+
+            # Create a new Toplevel window
+            pdf_window = tk.Toplevel(root)
+            pdf_window.title("PDF Preview")
+
+            # Create a label for the PDF preview on the new window
+            pdf_preview_label = tk.Label(pdf_window, image=photo)
+            pdf_preview_label.image = photo  # Keep a reference to the image object
+            pdf_preview_label.pack()
+
         else:
             messagebox.showerror("Error", "Failed to load the PDF file.")
 
+def close_pdf_file():
+    global pdf_window
+    if pdf_window is not None:
+        pdf_window.destroy()
+        pdf_window = None
 
-def update_ascii_animation():
-    global root, ascii_animation_label, ascii_animation_frames, frame_index
-
-    if root.winfo_exists():  # Check if the main GUI window still exists
-        frame_index = (frame_index + 1) % len(ascii_animation_frames)
-        ascii_animation_label.config(text=ascii_animation_frames[frame_index])
-        root.after(1000, update_ascii_animation)
 
 def save_email_addresses(email_address, recipient_email):
     with open("email_addresses.txt", "w") as file:
@@ -307,14 +410,40 @@ def load_email_addresses():
     except FileNotFoundError:
         return "", ""
 
+class ToolTip(object):
+    def __init__(self, widget, text='widget info'):
+        self.widget = widget
+        self.text = text
+        self.widget.bind("<Enter>", self.enter)
+        self.widget.bind("<Leave>", self.leave)
+        self.tipwindow = None
+
+    def enter(self, event=None):
+        x, y, _, _ = self.widget.bbox("insert")
+        x += self.widget.winfo_rootx() + 25
+        y += self.widget.winfo_rooty() + 25
+        self.tipwindow = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry("+%d+%d" % (x, y))
+        label = tk.Label(tw, text=self.text, justify=tk.LEFT,
+                      background="#ffffe0", relief=tk.SOLID, borderwidth=1,
+                      font=("tahoma", "8", "normal"))
+        label.pack(ipadx=1)
+
+    def leave(self, event=None):
+        tw = self.tipwindow
+        self.tipwindow = None
+        if tw:
+            tw.destroy()
+
 
 root = tk.Tk()
 root.title("Python Email Downloader")
 
 # E-mail Address
 email_address_label = tk.Label(root, text="E-mailadres:")
-email_address_label.grid(row=0, column=0, padx=5, pady=5, sticky="W")
-email_address_entry = tk.Entry(root)
+email_address_label.grid(row=0, column=0, padx=1, pady=5, sticky="W")
+email_address_entry = tk.Entry(root, width=80)
 email_address_entry.grid(row=0, column=1, padx=5, pady=5, sticky="WE")
 
 # Password
@@ -376,6 +505,7 @@ recipient_email_entry.grid(row=8, column=1, padx=5, pady=5, sticky="WE")
 # Download Button
 download_button = tk.Button(root, text="Downloaden", command=download_attachments_gui)
 download_button.grid(row=9, column=0, padx=5, pady=10)
+download_button_tooltip = ToolTip(download_button, "Click to download.")
 
 # Files Listbox
 files_listbox = tk.Listbox(root, selectmode=tk.MULTIPLE)
@@ -384,14 +514,22 @@ files_listbox.grid(row=9, column=1, padx=5, pady=10, sticky="WE")
 # Send Button
 send_button = tk.Button(root, text="Verzenden", command=send_selected_files)
 send_button.grid(row=9, column=2, padx=5, pady=10)
+send_button_tooltip = ToolTip(send_button, "Click to send selected files.")
 
 # Clear Button
 clear_button = tk.Button(root, text="Lijst wissen", command=clear_downloaded_files_list)
 clear_button.grid(row=9, column=3, padx=5, pady=10)
+clear_button_tooltip = ToolTip(clear_button, "Click to clear the list.")
 
 # Summary Button
 summary_button = tk.Button(root, text="Summary", command=generate_summary)
 summary_button.grid(row=9, column=4, padx=5, pady=10)
+summary_button_tooltip = ToolTip(summary_button, "Click to generate a summary.")
+
+# Close pdf preview Button
+close_button = tk.Button(root, text="Close PDF", command=close_pdf_file)
+close_button.grid(row=12, column=0, padx=5, pady=5)
+close_button_tooltip = ToolTip(close_button, "Click to close the preview pdf.")
 
 # Progress Bar
 progress_var = tk.DoubleVar()
@@ -401,74 +539,35 @@ progress_bar.grid(row=10, column=0, columnspan=3, padx=5, pady=5, sticky="WE")
 # Delete Button
 delete_button = tk.Button(root, text="Delete Selected", command=delete_selected_file)
 delete_button.grid(row=8, column=3, columnspan=2, pady=(10, 0), padx=10, sticky="WE")
+delete_button_tooltip = ToolTip(delete_button, "Click to delete selected files.")
 
 pdf_button = tk.Button(root, text="Open PDF", command=open_pdf_file)
 pdf_button.grid(row=11, column=0, padx=5, pady=5)
+pdf_button_tooltip = ToolTip(pdf_button, "Click to open a PDF file.")
+
+# Parse PDF Button
+parse_pdf_button = tk.Button(root, text="Parse PDF to Excel", command=parse_pdf_to_excel)
+parse_pdf_button.grid(row=10, column=2, padx=5, pady=5)
+parse_pdf_button_tooltip = ToolTip(parse_pdf_button, "Click to parse PDF to Excel.")
+
+# Clear Output File Button
+clear_output_file_button = tk.Button(root, text="Clear Output File", command=clear_output_file)
+clear_output_file_button.grid(row=10, column=3, padx=5, pady=5)
 
 quit_button = tk.Button(root, text="Afsluiten", command=close_application)
 quit_button.grid(row=14, column=4, padx=5, pady=10)
+quit_button_tooltip = ToolTip(quit_button, "Click to close the application.")
 
 pdf_preview_label = tk.Label(root)
 pdf_preview_label.grid(row=11, column=1, padx=5, pady=5, columnspan=4)
 
 import_pdf_button = tk.Button(root, text="Import PDF", command=import_pdf)
 import_pdf_button.grid(row=12, column=4, sticky="W", padx=(10, 0), pady=(10, 10))
-
-ascii_animation_frames = [
-    """
-
-     __  __            _      ______               _ _                                
-    |  \/  |          | |    |___  /              | | |                               
-    | \  / | __ _ _ __| | __    / / __ _ _ __   __| | |__   ___ _ __ __ _  ___ _ __   
-    | |\/| |/ _` | '__| |/ /   / / / _` | '_ \ / _` | '_ \ / _ \ '__/ _` |/ _ \ '_ \  
-    | |  | | (_| | |  |   <   / /_| (_| | | | | (_| | |_) |  __/ | | (_| |  __/ | | | 
-    |_|  |_|\__,_|_|  |_|\_\ /_____\__,_|_| |_|\__,_|_.__/ \___|_|  \__, |\___|_| |_| 
-                                                                     __/ |            
-                                                                    |___/             
-    """,
-    """
-
-
-     __  __            _      ______               _ _                                
-    |  \/  |          | |    |___  /              | | |                               
-    | \  / | __ _ _ __| | __    / / __ _ _ __   __| | |__   ___ _ __ __ _  ___ _ __   
-    | |\/| |/ _` | '__| |/ /   / / / _` | '_ \ / _` | '_ \ / _ \ '__/ _` |/ _ \ '_ \  
-    | |  | | (_| | |  |   <   / /_| (_| | | | | (_| | |_) |  __/ | | (_| |  __/ | | | 
-    |_|  |_|\__,_|_|  |_|\_\ /_____\__,_|_| |_|\__,_|_.__/ \___|_|  \__, |\___|_| |_| 
-                                                                     __/ |            
-                                                                    |___/             
-    """,
-    """
-     __  __            _      ______               _ _                                
-    |  \/  |          | |    |___  /              | | |                               
-    | \  / | __ _ _ __| | __    / / __ _ _ __   __| | |__   ___ _ __ __ _  ___ _ __   
-    | |\/| |/ _` | '__| |/ /   / / / _` | '_ \ / _` | '_ \ / _ \ '__/ _` |/ _ \ '_ \  
-    | |  | | (_| | |  |   <   / /_| (_| | | | | (_| | |_) |  __/ | | (_| |  __/ | | | 
-    |_|  |_|\__,_|_|  |_|\_\ /_____\__,_|_| |_|\__,_|_.__/ \___|_|  \__, |\___|_| |_| 
-                                                                     __/ |            
-                                                                    |___/             
-    """
-]
-
-# ASCII Animation
-ascii_animation_label = tk.Label(root, text="", wraplength=400, height=9, width=50)
-ascii_animation_label.grid(row=12, column=0, columnspan=3, pady=(10, 0), padx=10)
+import_pdf_button_tooltip = ToolTip(import_pdf_button, "Click to import a PDF file.")
 
 email_address, recipient_email = load_email_addresses()
 email_address_entry.insert(0, email_address)
 recipient_email_entry.insert(0, recipient_email)
-
-# Window Configuration
-window_width = 680
-window_height = 1100
-screen_width = root.winfo_screenwidth()
-screen_height = root.winfo_screenheight()
-x_coord = int((screen_width / 2) - (window_width / 2))
-y_coord = int((screen_height / 2) - (window_height / 2))
-root.geometry(f"{window_width}x{window_height}+{x_coord}+{y_coord}")
-
-update_ascii_animation()
-
 
 stored_keywords = load_keywords()
 if stored_keywords:
@@ -487,5 +586,38 @@ def on_closing():
 
 root.protocol("WM_DELETE_WINDOW", on_closing)
 
+# Empty label to fill space
+empty_label = tk.Label(root)
+empty_label.grid(row=15, sticky='ns')
+
+# Configuring row weight for the empty label to be large to consume remaining space
+root.grid_rowconfigure(15, weight=1)
+
+# Scrolling text
+scroll_text_var = tk.StringVar()
+scroll_label = tk.Label(root, textvariable=scroll_text_var, anchor='w', font=("Helvetica", 20))
+
+def scroll_text(message, delay=100):
+    if len(message) > 0:
+        message = message[1:] + message[0]  # Move the first character to the end
+        scroll_text_var.set(message)
+        root.after(delay, lambda: scroll_text(message, delay))
+
+scroll_text('   This is your scrolling message.   ')
+
+# Find the maximum row number among all grid slaves
+max_row = max(child.grid_info()['row'] for child in root.grid_slaves())
+scroll_label.grid(row=max_row + 1, column=0, columnspan=5, sticky="WE")  # Place the scroll_label below all existing widgets
+
+# Window Configuration
+window_width = 680
+window_height = 800
+screen_width = root.winfo_screenwidth()
+screen_height = root.winfo_screenheight()
+x_coord = int((screen_width / 2) - (window_width / 2))
+y_coord = int((screen_height / 2) - (window_height / 2))
+root.geometry(f"{window_width}x{window_height}+{x_coord}+{y_coord}")
+
 root.mainloop()
+
 
