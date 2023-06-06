@@ -442,8 +442,8 @@ root.title("Python Email Downloader")
 
 # E-mail Address
 email_address_label = tk.Label(root, text="E-mailadres:")
-email_address_label.grid(row=0, column=0, padx=1, pady=5, sticky="W")
-email_address_entry = tk.Entry(root, width=80)
+email_address_label.grid(row=0, column=0, padx=5, pady=5, sticky="W")
+email_address_entry = tk.Entry(root)
 email_address_entry.grid(row=0, column=1, padx=5, pady=5, sticky="WE")
 
 # Password
@@ -483,11 +483,12 @@ browse_button.grid(row=5, column=2, padx=5, pady=5)
 # All Attachments Checkbox
 all_attachments_var = tk.IntVar()
 all_attachments_checkbox = tk.Checkbutton(root, text="Download alle bijlagen", variable=all_attachments_var)
-all_attachments_checkbox.grid(row=6, column=0, columnspan=2, padx=5, pady=5)
+all_attachments_checkbox.grid(row=6, column=0, columnspan=1, padx=5, pady=5)
 
 # Download All Attachments
-download_all_button = tk.Button(root, text="Download All Attachments", command=download_attachments_all_keywords_gui)
-download_all_button.grid(row=6, column=3, columnspan=2, pady=(10, 0), padx=5, sticky="w")
+download_all_button = tk.Button(root, text="Download Alle zoekwoorden tegelijk", command=download_attachments_all_keywords_gui)
+download_all_button.grid(row=6, column=2, columnspan=2, pady=(10, 0), padx=5, sticky="w")
+download_all_button_tooltip = ToolTip(download_all_button, "Click to download alle zoekwoorden pdf's tegelijk.")
 
 # File Extension Filter
 file_extension_label = tk.Label(root, text="Bestandsextensie filter:")
@@ -531,14 +532,9 @@ close_button = tk.Button(root, text="Close PDF", command=close_pdf_file)
 close_button.grid(row=12, column=0, padx=5, pady=5)
 close_button_tooltip = ToolTip(close_button, "Click to close the preview pdf.")
 
-# Progress Bar
-progress_var = tk.DoubleVar()
-progress_bar = ttk.Progressbar(root, variable=progress_var)
-progress_bar.grid(row=10, column=0, columnspan=3, padx=5, pady=5, sticky="WE")
-
 # Delete Button
 delete_button = tk.Button(root, text="Delete Selected", command=delete_selected_file)
-delete_button.grid(row=8, column=3, columnspan=2, pady=(10, 0), padx=10, sticky="WE")
+delete_button.grid(row=8, column=2, columnspan=2, pady=(10, 0), padx=10, sticky="WE")
 delete_button_tooltip = ToolTip(delete_button, "Click to delete selected files.")
 
 pdf_button = tk.Button(root, text="Open PDF", command=open_pdf_file)
